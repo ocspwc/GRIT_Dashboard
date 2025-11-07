@@ -80,7 +80,8 @@ def fetch_google_sheets_data():
         else:
             grit_df = pd.DataFrame()
         
-        worksheet2 = spreadsheet1.worksheet('IPE')
+        spreadsheet2 = client.open('Referral Information')
+        worksheet2 = spreadsheet2.worksheet('Sheet1')
         
         # Get all values and handle duplicate headers
         ipe_values = worksheet2.get_all_values()
@@ -157,7 +158,8 @@ def get_worksheets():
     try:
         spreadsheet1 = client.open('PWC_Referral_GRIT')
         worksheet1 = spreadsheet1.worksheet('GRIT')
-        worksheet2 = spreadsheet1.worksheet('IPE')
+        spreadsheet2 = client.open('Referral Information')
+        worksheet2 = spreadsheet2.worksheet('Sheet1')
         return worksheet1, worksheet2, None
     except Exception as e:
         return None, None, str(e)
