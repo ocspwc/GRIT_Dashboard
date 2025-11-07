@@ -190,6 +190,125 @@ def col_num_to_letter(col_num):
         col_num //= 26
     return result
 
+def get_sheet_headers_safe(worksheet):
+    """Safely get sheet headers with error handling and validation"""
+    try:
+        headers = worksheet.row_values(1)
+        # Filter out completely empty headers and normalize
+        cleaned_headers = []
+        for i, header in enumerate(headers):
+            if header and str(header).strip():
+                cleaned_headers.append(str(header).strip())
+            else:
+                # Use column letter as fallback for empty headers
+                cleaned_headers.append(f"Column_{col_num_to_letter(i+1)}")
+        return cleaned_headers
+    except Exception as e:
+        st.error(f"Error reading sheet headers: {str(e)}")
+        return []
+
+def get_row_values_safe(worksheet, row_num, num_cols=None):
+    """Safely get row values with proper padding"""
+    try:
+        row_values = worksheet.row_values(row_num)
+        if num_cols is None:
+            num_cols = len(get_sheet_headers_safe(worksheet))
+        # Pad row if it's shorter than expected
+        while len(row_values) < num_cols:
+            row_values.append('')
+        return row_values[:num_cols]  # Truncate if longer
+    except Exception as e:
+        st.error(f"Error reading row {row_num}: {str(e)}")
+        return [''] * (num_cols or 0)
+
+def update_row_safe(worksheet, row_num, row_data_dict, sheet_headers):
+    """Safely update a row in Google Sheets with proper column alignment"""
+    try:
+        # Get current row to preserve existing data
+        current_row_values = get_row_values_safe(worksheet, row_num, len(sheet_headers))
+        
+        # Create mapping from headers to current values
+        row_dict = {}
+        for i, header in enumerate(sheet_headers):
+            if i < len(current_row_values):
+                row_dict[header] = current_row_values[i]
+            else:
+                row_dict[header] = ''
+        
+        # Update with new data (case-insensitive header matching)
+        header_lower_map = {h.lower().strip(): h for h in sheet_headers}
+        for key, value in row_data_dict.items():
+            key_lower = key.lower().strip()
+            if key_lower in header_lower_map:
+                row_dict[header_lower_map[key_lower]] = value
+        
+        # Convert to list in correct order
+        updated_row = [str(row_dict.get(header, '')) for header in sheet_headers]
+        
+        # Update the row
+        if len(sheet_headers) > 0:
+            last_col_letter = col_num_to_letter(len(sheet_headers))
+            range_name = f'A{row_num}:{last_col_letter}{row_num}'
+            worksheet.update(range_name, [updated_row], value_input_option='USER_ENTERED')
+            return True
+        return False
+    except Exception as e:
+        st.error(f"Error updating row {row_num}: {str(e)}")
+        return False
+
+def append_row_safe(worksheet, row_data_dict, sheet_headers):
+    """Safely append a row to Google Sheets with proper column alignment"""
+    try:
+        # Build row using sheet headers (case-insensitive matching)
+        header_lower_map = {h.lower().strip(): h for h in sheet_headers}
+        new_row = []
+        
+        # Debug: track which columns are being matched
+        matched_columns = {}
+        
+        for header in sheet_headers:
+            header_lower = header.lower().strip()
+            value = None
+            
+            # Try exact match first
+            if header in row_data_dict:
+                value = row_data_dict[header]
+                matched_columns[header] = "exact"
+            # Try case-insensitive match by iterating through data keys
+            else:
+                for key, val in row_data_dict.items():
+                    if key.lower().strip() == header_lower:
+                        value = val
+                        matched_columns[header] = f"matched with '{key}'"
+                        break
+            
+            if value is None:
+                value = ''
+                matched_columns[header] = "empty (no match)"
+            
+            new_row.append(str(value) if value is not None else '')
+        
+        # Append the row
+        worksheet.append_row(new_row, value_input_option='USER_ENTERED')
+        
+        # Debug output (only show if there are issues)
+        unmatched_data_keys = set(k.lower().strip() for k in row_data_dict.keys()) - set(h.lower().strip() for h in sheet_headers)
+        if unmatched_data_keys:
+            st.warning(f"⚠️ Some data keys didn't match any headers: {unmatched_data_keys}")
+            with st.expander("🔍 Debug: Column Matching Details"):
+                st.write("**Sheet Headers:**", sheet_headers)
+                st.write("**Data Keys:**", list(row_data_dict.keys()))
+                st.write("**Matching Results:**", matched_columns)
+        
+        return True
+    except Exception as e:
+        st.error(f"❌ Error appending row: {str(e)}")
+        with st.expander("🔍 Debug: Error Details"):
+            st.write("**Sheet Headers:**", sheet_headers)
+            st.write("**Data Keys:**", list(row_data_dict.keys()))
+            st.write("**Full Error:**", str(e))
+        return False
+
 # Apply formatting
 #df["Phone Number"] = df["Phone Number"].astype(str).apply(format_phone)
 
@@ -1225,24 +1344,24 @@ else:
                                     'Day of Case Note': day_of_case_note.strftime('%m/%d/%Y'),
                                     'Case Notes': case_notes
                                 }
-                                # Align to actual sheet headers to avoid mismatch with cleaned DataFrame headers
-                                sheet_headers = worksheet2.row_values(1)
-                                new_row = [new_row_data.get(col, '') for col in sheet_headers]
-                                worksheet2.append_row(new_row, value_input_option='USER_ENTERED')
-                                
-                                # Clear cache to show updated data
-                                fetch_google_sheets_data.clear()
-                                st.session_state.data_last_fetched = 0
-                                
-                                st.success("✅ Referral added successfully!")
+                                # Get sheet headers safely and append row
+                                sheet_headers = get_sheet_headers_safe(worksheet2)
+                                if not sheet_headers:
+                                    st.error("❌ Could not read sheet headers. Please check the sheet structure.")
+                                else:
+                                    if append_row_safe(worksheet2, new_row_data, sheet_headers):
+                                        # Clear cache to show updated data
+                                        fetch_google_sheets_data.clear()
+                                        st.session_state.data_last_fetched = 0
+                                        st.success("✅ Referral added successfully!")
 
-                                coordinator_emails = ["jkooyoomjian@pwcgov.org"]
-                                subject = f"New Referral Submitted to IPE program: {name_of_client}"
+                                        coordinator_emails = ["jkooyoomjian@pwcgov.org"]
+                                        subject = f"New Referral Submitted to IPE program: {name_of_client}"
 
-                                for email in coordinator_emails:
-                                    try:
-                                        coordinator_name = USERS[email]["IPE"]["name"]
-                                        personalized_body = f"""Hi {coordinator_name},
+                                        for email in coordinator_emails:
+                                            try:
+                                                coordinator_name = USERS[email]["IPE"]["name"]
+                                                personalized_body = f"""Hi {coordinator_name},
 
                     A new referral has been submitted to IPE program:
 
@@ -1262,16 +1381,18 @@ else:
                     Best,
                     PWC GRIT Dashboard
                     """
-                                        send_email_mailjet(
-                                            to_email=email,
-                                            subject=subject,
-                                            body=personalized_body,
-                                        )
-                                    except Exception as e:
-                                        st.warning(f"⚠️ Failed to send email to coordinator {email}: {e}")
-                                
-                                time.sleep(3)
-                                st.rerun()
+                                                send_email_mailjet(
+                                                    to_email=email,
+                                                    subject=subject,
+                                                    body=personalized_body,
+                                                )
+                                            except Exception as e:
+                                                st.warning(f"⚠️ Failed to send email to coordinator {email}: {e}")
+                                        
+                                        time.sleep(3)
+                                        st.rerun()
+                                    else:
+                                        st.error("❌ Failed to add referral. Please try again.")
                             except Exception as e:
                                 st.error(f"❌ Error adding referral: {str(e)}")
                         else:
@@ -1471,17 +1592,19 @@ else:
                                                 if row_num is None:
                                                     raise ValueError("Unable to resolve sheet row for deletion.")
                                                 
-                                                # Get actual sheet headers to determine proper column range
-                                                sheet_headers = worksheet2.row_values(1)
-                                                last_col_letter = col_num_to_letter(len(sheet_headers))
-                                                
-                                                # Delete the row by clearing it
-                                                worksheet2.batch_clear([f'A{row_num}:{last_col_letter}{row_num}'])
-                                                
-                                                # Clear cache to show updated data
-                                                fetch_google_sheets_data.clear()
-                                                
-                                                st.success(f"✅ Comment deleted successfully for {selected_client}")
+                                                # Get sheet headers safely to determine proper column range
+                                                sheet_headers = get_sheet_headers_safe(worksheet2)
+                                                if not sheet_headers:
+                                                    st.error("❌ Could not read sheet headers. Please check the sheet structure.")
+                                                else:
+                                                    last_col_letter = col_num_to_letter(len(sheet_headers))
+                                                    # Delete the row by clearing it
+                                                    worksheet2.batch_clear([f'A{row_num}:{last_col_letter}{row_num}'])
+                                                    
+                                                    # Clear cache to show updated data
+                                                    fetch_google_sheets_data.clear()
+                                                    
+                                                    st.success(f"✅ Comment deleted successfully for {selected_client}")
                                                 
                                                 # Clear session state
                                                 if f"deleting_comment_{selected_client}" in st.session_state:
@@ -1544,29 +1667,24 @@ else:
                                                 if row_num is None:
                                                     raise ValueError("Unable to resolve sheet row for update.")
                                                 
-                                                # Get actual sheet headers and current row from sheet
-                                                sheet_headers = worksheet2.row_values(1)
-                                                current_sheet_row = worksheet2.row_values(row_num)
-                                                # Pad row if it's shorter than headers
-                                                while len(current_sheet_row) < len(sheet_headers):
-                                                    current_sheet_row.append('')
-                                                
-                                                # Create a mapping from sheet headers to values
-                                                row_dict = dict(zip(sheet_headers, current_sheet_row))
-                                                
-                                                # Update the fields we're editing
-                                                row_dict['Day of Case Note'] = edit_date.strftime('%m/%d/%Y')
-                                                row_dict['Case Notes'] = edit_note.strip()
-                                                
-                                                # Convert back to list in the correct order using sheet headers
-                                                updated_row = [str(row_dict.get(col, '')) for col in sheet_headers]
-                                                last_col_letter = col_num_to_letter(len(sheet_headers))
-                                                worksheet2.update(f'A{row_num}:{last_col_letter}{row_num}', [updated_row])
-                                                
-                                                # Clear cache to show updated data
-                                                fetch_google_sheets_data.clear()
-                                                
-                                                st.success(f"✅ Comment updated successfully for {selected_client}")
+                                                # Get sheet headers safely
+                                                sheet_headers = get_sheet_headers_safe(worksheet2)
+                                                if not sheet_headers:
+                                                    st.error("❌ Could not read sheet headers. Please check the sheet structure.")
+                                                else:
+                                                    # Prepare update data
+                                                    update_data = {
+                                                        'Day of Case Note': edit_date.strftime('%m/%d/%Y'),
+                                                        'Case Notes': edit_note.strip()
+                                                    }
+                                                    
+                                                    # Update the row safely
+                                                    if update_row_safe(worksheet2, row_num, update_data, sheet_headers):
+                                                        # Clear cache to show updated data
+                                                        fetch_google_sheets_data.clear()
+                                                        st.success(f"✅ Comment updated successfully for {selected_client}")
+                                                    else:
+                                                        st.error("❌ Failed to update comment. Please try again.")
                                                 
                                                 # Clear session state
                                                 if f"editing_comment_{selected_client}" in st.session_state:
@@ -1641,18 +1759,17 @@ else:
                                         'Case Notes': new_note.strip()
                                     }
                                     
-                                    # Get actual sheet headers to ensure proper column alignment
-                                    sheet_headers = worksheet2.row_values(1)
-                                    # Build row using sheet headers to match exact column order
-                                    new_row = [new_row_data.get(col, '') for col in sheet_headers]
-                                    
-                                    # Append to Google Sheets
-                                    worksheet2.append_row(new_row)
-                                    
-                                    # Clear cache to show updated data
-                                    fetch_google_sheets_data.clear()
-                                    
-                                    st.success(f"✅ Note added successfully for {selected_client} on {note_date_str}")
+                                    # Get sheet headers safely and append row
+                                    sheet_headers = get_sheet_headers_safe(worksheet2)
+                                    if not sheet_headers:
+                                        st.error("❌ Could not read sheet headers. Please check the sheet structure.")
+                                    else:
+                                        if append_row_safe(worksheet2, new_row_data, sheet_headers):
+                                            # Clear cache to show updated data
+                                            fetch_google_sheets_data.clear()
+                                            st.success(f"✅ Note added successfully for {selected_client} on {note_date_str}")
+                                        else:
+                                            st.error("❌ Failed to add note. Please try again.")
                                     st.rerun()
                                     
                                 except Exception as e:
