@@ -50,6 +50,70 @@ client = gspread.authorize(creds)
 # Cache configuration
 CACHE_DURATION = 300  
 
+def normalize_sheet_data(values):
+    """Normalize sheet data by ensuring all rows have the same length and removing leading empty columns"""
+    if not values or len(values) == 0:
+        return []
+    
+    # Get header row
+    header_row = values[0]
+    
+    # Find first non-empty header index (skip leading empty columns)
+    first_data_col = 0
+    for i, header in enumerate(header_row):
+        if header and str(header).strip():
+            first_data_col = i
+            break
+    
+    # Check if we have any non-empty headers at all
+    has_non_empty = any(h and str(h).strip() for h in header_row)
+    if not has_non_empty:
+        # If all headers are empty, don't trim anything
+        first_data_col = 0
+    
+    # Trim leading empty columns from headers
+    trimmed_headers = header_row[first_data_col:]
+    max_cols = len(trimmed_headers)
+    
+    # If trimming resulted in empty headers, return original data with padding
+    if max_cols == 0:
+        max_cols = len(header_row)
+        first_data_col = 0
+        trimmed_headers = header_row
+    
+    # Normalize all data rows: trim leading columns and pad/truncate to match header length
+    normalized_data = []
+    for row_idx, row in enumerate(values):
+        # Ensure row is a list
+        if not isinstance(row, list):
+            row = list(row) if hasattr(row, '__iter__') else [row]
+        
+        # For header row, use trimmed version
+        if row_idx == 0:
+            trimmed_row = trimmed_headers
+        else:
+            # For data rows: if they have more columns than first_data_col, trim the leading columns
+            # If they have fewer columns, they likely don't have the leading empty columns, so use as-is
+            if len(row) > first_data_col:
+                # Row has leading empty columns, trim them
+                trimmed_row = row[first_data_col:]
+            elif len(row) <= first_data_col:
+                # Row doesn't have leading empty columns (Google Sheets API didn't return them)
+                # Use the row as-is - it should already align with trimmed headers
+                trimmed_row = row
+        
+        # Pad or truncate to match header length
+        if len(trimmed_row) < max_cols:
+            # Pad with empty strings at the end
+            trimmed_row = trimmed_row + [''] * (max_cols - len(trimmed_row))
+        elif len(trimmed_row) > max_cols:
+            # Truncate to match header length
+            trimmed_row = trimmed_row[:max_cols]
+        
+        normalized_data.append(trimmed_row)
+    
+    return normalized_data
+
 @st.cache_data(ttl=CACHE_DURATION)
 def fetch_google_sheets_data():
     """Fetch data from Google Sheets with caching"""
@@ -60,23 +124,28 @@ def fetch_google_sheets_data():
         # Get all values and handle duplicate headers
         grit_values = worksheet1.get_all_values()
         if grit_values:
-            # Clean up duplicate headers by making them unique
-            headers = grit_values[0]
-            cleaned_headers = []
-            header_counts = {}
-            for header in headers:
-                if header == '' or header in header_counts:
-                    header_counts[header] = header_counts.get(header, 0) + 1
-                    cleaned_headers.append(f"{header}_{header_counts[header]}" if header else f"empty_{header_counts[header]}")
-                else:
-                    header_counts[header] = 1
-                    cleaned_headers.append(header)
-            
-            # Create DataFrame with cleaned headers
-            grit_data = grit_values[1:]  # Skip header row
-            grit_df = pd.DataFrame(grit_data, columns=cleaned_headers)
-            grit_df['Date'] = pd.to_datetime(grit_df['Date'], errors='coerce')
-            grit_df['Day of Case Note'] = pd.to_datetime(grit_df['Day of Case Note'], errors='coerce')
+            # Normalize data to fix column alignment
+            normalized_grit = normalize_sheet_data(grit_values)
+            if normalized_grit:
+                headers = normalized_grit[0]
+                # Clean up duplicate headers by making them unique
+                cleaned_headers = []
+                header_counts = {}
+                for header in headers:
+                    if header == '' or header in header_counts:
+                        header_counts[header] = header_counts.get(header, 0) + 1
+                        cleaned_headers.append(f"{header}_{header_counts[header]}" if header else f"empty_{header_counts[header]}")
+                    else:
+                        header_counts[header] = 1
+                        cleaned_headers.append(header)
+                
+                # Create DataFrame with cleaned headers
+                grit_data = normalized_grit[1:]  # Skip header row
+                grit_df = pd.DataFrame(grit_data, columns=cleaned_headers)
+                grit_df['Date'] = pd.to_datetime(grit_df['Date'], errors='coerce')
+                grit_df['Day of Case Note'] = pd.to_datetime(grit_df['Day of Case Note'], errors='coerce')
+            else:
+                grit_df = pd.DataFrame()
         else:
             grit_df = pd.DataFrame()
 
@@ -86,30 +155,35 @@ def fetch_google_sheets_data():
         # Get all values and handle duplicate headers
         ipe_values = worksheet2.get_all_values()
         if ipe_values:
-            # Clean up duplicate headers by making them unique
-            headers = ipe_values[0]
-            cleaned_headers = []
-            header_counts = {}
-            for header in headers:
-                if header == '' or header in header_counts:
-                    header_counts[header] = header_counts.get(header, 0) + 1
-                    cleaned_headers.append(f"{header}_{header_counts[header]}" if header else f"empty_{header_counts[header]}")
-                else:
-                    header_counts[header] = 1
-                    cleaned_headers.append(header)
-            
-            # Create DataFrame with cleaned headers
-            ipe_data = ipe_values[1:]  # Skip header row
-            ipe_df = pd.DataFrame(ipe_data, columns=cleaned_headers)
-            # Safely convert date columns - handle cleaned headers
-            for col in cleaned_headers:
-                col_lower = col.lower().strip()
-                # Check if this is a "Date Received" column (handle cleaned headers like "Date Received_2")
-                if 'date received' in col_lower and not col_lower.startswith('day of case'):
-                    ipe_df[col] = pd.to_datetime(ipe_df[col], errors='coerce')
-                # Check if this is a "Day of Case Note" column
-                elif 'day of case note' in col_lower:
-                    ipe_df[col] = pd.to_datetime(ipe_df[col], errors='coerce')
+            # Normalize data to fix column alignment
+            normalized_ipe = normalize_sheet_data(ipe_values)
+            if normalized_ipe:
+                headers = normalized_ipe[0]
+                # Clean up duplicate headers by making them unique
+                cleaned_headers = []
+                header_counts = {}
+                for header in headers:
+                    if header == '' or header in header_counts:
+                        header_counts[header] = header_counts.get(header, 0) + 1
+                        cleaned_headers.append(f"{header}_{header_counts[header]}" if header else f"empty_{header_counts[header]}")
+                    else:
+                        header_counts[header] = 1
+                        cleaned_headers.append(header)
+                
+                # Create DataFrame with cleaned headers
+                ipe_data = normalized_ipe[1:]  # Skip header row
+                ipe_df = pd.DataFrame(ipe_data, columns=cleaned_headers)
+                # Safely convert date columns - handle cleaned headers
+                for col in cleaned_headers:
+                    col_lower = col.lower().strip()
+                    # Check if this is a "Date Received" column (handle cleaned headers like "Date Received_2")
+                    if 'date received' in col_lower and not col_lower.startswith('day of case'):
+                        ipe_df[col] = pd.to_datetime(ipe_df[col], errors='coerce')
+                    # Check if this is a "Day of Case Note" column
+                    elif 'day of case note' in col_lower:
+                        ipe_df[col] = pd.to_datetime(ipe_df[col], errors='coerce')
+            else:
+                ipe_df = pd.DataFrame()
         else:
             ipe_df = pd.DataFrame()
         
