@@ -1,0 +1,9 @@
+streamlit==1.31.0
+streamlit_extras
+millify
+gsheetsdb==0.1.13.1
+gspread
+oauth2client
+altair
+google-api-python-client
+mailjet_rest
