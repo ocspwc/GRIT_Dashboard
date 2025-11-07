@@ -79,7 +79,7 @@ def fetch_google_sheets_data():
             grit_df['Day of Case Note'] = pd.to_datetime(grit_df['Day of Case Note'], errors='coerce')
         else:
             grit_df = pd.DataFrame()
-        
+
         spreadsheet2 = client.open('Referral Information')
         worksheet2 = spreadsheet2.worksheet('Sheet1')
         
@@ -162,7 +162,7 @@ def get_worksheets():
         worksheet2 = spreadsheet2.worksheet('Sheet1')
         return worksheet1, worksheet2, None
     except Exception as e:
-        return None, None, str(e)
+        return None, None, str(e) 
 
 # Get worksheets for write operations
 worksheet1, worksheet2, worksheet_error = get_worksheets()
@@ -180,6 +180,15 @@ def format_phone(phone_str):
         return f"+1 ({digits[1:4]}) {digits[4:7]}-{digits[7:]}"
     else:
         return phone_str  # Return original if not standard length
+
+def col_num_to_letter(col_num):
+    """Convert column number (1-based) to Excel column letter (A, B, ..., Z, AA, AB, ...)"""
+    result = ""
+    while col_num > 0:
+        col_num -= 1
+        result = chr(65 + (col_num % 26)) + result
+        col_num //= 26
+    return result
 
 # Apply formatting
 #df["Phone Number"] = df["Phone Number"].astype(str).apply(format_phone)
@@ -812,8 +821,12 @@ else:
                                                 if row_num is None:
                                                     raise ValueError("Unable to resolve sheet row for deletion.")
                                                 
+                                                # Get actual sheet headers to determine proper column range
+                                                sheet_headers = worksheet1.row_values(1)
+                                                last_col_letter = col_num_to_letter(len(sheet_headers))
+                                                
                                                 # Delete the row by clearing it
-                                                worksheet1.batch_clear([f'A{row_num}:Z{row_num}'])
+                                                worksheet1.batch_clear([f'A{row_num}:{last_col_letter}{row_num}'])
                                                 
                                                 # Clear cache to show updated data
                                                 fetch_google_sheets_data.clear()
@@ -880,26 +893,25 @@ else:
                                                 row_num = option_sheet_rows[edit_idx]
                                                 if row_num is None:
                                                     raise ValueError("Unable to resolve sheet row for update.")
-                                                df_row_idx = int(row_num) - 2
-                                                # Start from the full existing row to avoid wiping other fields
-                                                current_row = grit_df.iloc[df_row_idx].copy() if 0 <= df_row_idx < len(grit_df) else pd.Series(index=grit_df.columns)
-                                                current_row = current_row.reindex(grit_df.columns)
-                                                current_row['Day of Case Note'] = edit_date.strftime('%m/%d/%Y')
-                                                current_row['Case Notes'] = edit_note.strip()
-                                                # Convert to list of strings
-                                                updated_row = []
-                                                for col in grit_df.columns:
-                                                    value = current_row.get(col, '')
-                                                    try:
-                                                        if hasattr(value, 'strftime') and pd.notna(value):
-                                                            updated_row.append(value.strftime('%m/%d/%Y'))
-                                                        elif pd.isna(value) or str(value) == 'NaT':
-                                                            updated_row.append('')
-                                                        else:
-                                                            updated_row.append(str(value))
-                                                    except:
-                                                        updated_row.append('')
-                                                worksheet1.update(f'A{row_num}:Z{row_num}', [updated_row])
+                                                
+                                                # Get actual sheet headers and current row from sheet
+                                                sheet_headers = worksheet1.row_values(1)
+                                                current_sheet_row = worksheet1.row_values(row_num)
+                                                # Pad row if it's shorter than headers
+                                                while len(current_sheet_row) < len(sheet_headers):
+                                                    current_sheet_row.append('')
+                                                
+                                                # Create a mapping from sheet headers to values
+                                                row_dict = dict(zip(sheet_headers, current_sheet_row))
+                                                
+                                                # Update the fields we're editing
+                                                row_dict['Day of Case Note'] = edit_date.strftime('%m/%d/%Y')
+                                                row_dict['Case Notes'] = edit_note.strip()
+                                                
+                                                # Convert back to list in the correct order using sheet headers
+                                                updated_row = [str(row_dict.get(col, '')) for col in sheet_headers]
+                                                last_col_letter = col_num_to_letter(len(sheet_headers))
+                                                worksheet1.update(f'A{row_num}:{last_col_letter}{row_num}', [updated_row])
                                                 
                                                 # Clear cache to show updated data
                                                 fetch_google_sheets_data.clear()
@@ -979,13 +991,10 @@ else:
                                         'Case Notes': new_note.strip()
                                     }
                                     
-                                    # Add empty values for other columns to maintain structure
-                                    for col in grit_df.columns:
-                                        if col not in new_row_data:
-                                            new_row_data[col] = ''
-                                    
-                                    # Convert to list in the correct order
-                                    new_row = [new_row_data.get(col, '') for col in grit_df.columns]
+                                    # Get actual sheet headers to ensure proper column alignment
+                                    sheet_headers = worksheet1.row_values(1)
+                                    # Build row using sheet headers to match exact column order
+                                    new_row = [new_row_data.get(col, '') for col in sheet_headers]
                                     
                                     # Append to Google Sheets
                                     worksheet1.append_row(new_row)
@@ -1462,8 +1471,12 @@ else:
                                                 if row_num is None:
                                                     raise ValueError("Unable to resolve sheet row for deletion.")
                                                 
+                                                # Get actual sheet headers to determine proper column range
+                                                sheet_headers = worksheet2.row_values(1)
+                                                last_col_letter = col_num_to_letter(len(sheet_headers))
+                                                
                                                 # Delete the row by clearing it
-                                                worksheet2.batch_clear([f'A{row_num}:Z{row_num}'])
+                                                worksheet2.batch_clear([f'A{row_num}:{last_col_letter}{row_num}'])
                                                 
                                                 # Clear cache to show updated data
                                                 fetch_google_sheets_data.clear()
@@ -1530,26 +1543,25 @@ else:
                                                 row_num = option_sheet_rows[edit_idx]
                                                 if row_num is None:
                                                     raise ValueError("Unable to resolve sheet row for update.")
-                                                df_row_idx = int(row_num) - 2
-                                                # Start from the full existing row to avoid wiping other fields
-                                                current_row = ipe_df.iloc[df_row_idx].copy() if 0 <= df_row_idx < len(ipe_df) else pd.Series(index=ipe_df.columns)
-                                                current_row = current_row.reindex(ipe_df.columns)
-                                                current_row['Day of Case Note'] = edit_date.strftime('%m/%d/%Y')
-                                                current_row['Case Notes'] = edit_note.strip()
-                                                # Convert to list of strings
-                                                updated_row = []
-                                                for col in ipe_df.columns:
-                                                    value = current_row.get(col, '')
-                                                    try:
-                                                        if hasattr(value, 'strftime') and pd.notna(value):
-                                                            updated_row.append(value.strftime('%m/%d/%Y'))
-                                                        elif pd.isna(value) or str(value) == 'NaT':
-                                                            updated_row.append('')
-                                                        else:
-                                                            updated_row.append(str(value))
-                                                    except:
-                                                        updated_row.append('')
-                                                worksheet2.update(f'A{row_num}:Z{row_num}', [updated_row])
+                                                
+                                                # Get actual sheet headers and current row from sheet
+                                                sheet_headers = worksheet2.row_values(1)
+                                                current_sheet_row = worksheet2.row_values(row_num)
+                                                # Pad row if it's shorter than headers
+                                                while len(current_sheet_row) < len(sheet_headers):
+                                                    current_sheet_row.append('')
+                                                
+                                                # Create a mapping from sheet headers to values
+                                                row_dict = dict(zip(sheet_headers, current_sheet_row))
+                                                
+                                                # Update the fields we're editing
+                                                row_dict['Day of Case Note'] = edit_date.strftime('%m/%d/%Y')
+                                                row_dict['Case Notes'] = edit_note.strip()
+                                                
+                                                # Convert back to list in the correct order using sheet headers
+                                                updated_row = [str(row_dict.get(col, '')) for col in sheet_headers]
+                                                last_col_letter = col_num_to_letter(len(sheet_headers))
+                                                worksheet2.update(f'A{row_num}:{last_col_letter}{row_num}', [updated_row])
                                                 
                                                 # Clear cache to show updated data
                                                 fetch_google_sheets_data.clear()
@@ -1629,13 +1641,10 @@ else:
                                         'Case Notes': new_note.strip()
                                     }
                                     
-                                    # Add empty values for other columns to maintain structure
-                                    for col in ipe_df.columns:
-                                        if col not in new_row_data:
-                                            new_row_data[col] = ''
-                                    
-                                    # Convert to list in the correct order
-                                    new_row = [new_row_data.get(col, '') for col in ipe_df.columns]
+                                    # Get actual sheet headers to ensure proper column alignment
+                                    sheet_headers = worksheet2.row_values(1)
+                                    # Build row using sheet headers to match exact column order
+                                    new_row = [new_row_data.get(col, '') for col in sheet_headers]
                                     
                                     # Append to Google Sheets
                                     worksheet2.append_row(new_row)
