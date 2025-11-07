@@ -155,7 +155,7 @@ st.session_state.data_last_fetched = current_time
 def get_worksheets():
     """Get worksheet objects for write operations"""
     try:
-        spreadsheet1 = client.open('Referral Information')
+        spreadsheet1 = client.open('PWC_Referral_GRIT')
         worksheet1 = spreadsheet1.worksheet('GRIT')
         worksheet2 = spreadsheet1.worksheet('IPE')
         return worksheet1, worksheet2, None
