@@ -101,8 +101,15 @@ def fetch_google_sheets_data():
             # Create DataFrame with cleaned headers
             ipe_data = ipe_values[1:]  # Skip header row
             ipe_df = pd.DataFrame(ipe_data, columns=cleaned_headers)
-            ipe_df['Date Received'] = pd.to_datetime(ipe_df['Date Received'], errors='coerce')
-            ipe_df['Day of Case Note'] = pd.to_datetime(ipe_df['Day of Case Note'], errors='coerce')
+            # Safely convert date columns - handle cleaned headers
+            for col in cleaned_headers:
+                col_lower = col.lower().strip()
+                # Check if this is a "Date Received" column (handle cleaned headers like "Date Received_2")
+                if 'date received' in col_lower and not col_lower.startswith('day of case'):
+                    ipe_df[col] = pd.to_datetime(ipe_df[col], errors='coerce')
+                # Check if this is a "Day of Case Note" column
+                elif 'day of case note' in col_lower:
+                    ipe_df[col] = pd.to_datetime(ipe_df[col], errors='coerce')
         else:
             ipe_df = pd.DataFrame()
         
@@ -168,6 +175,14 @@ def get_worksheets():
 worksheet1, worksheet2, worksheet_error = get_worksheets()
 if worksheet_error:
     st.error(f"Error accessing worksheets: {worksheet_error}")
+
+def find_column_by_pattern(df, pattern):
+    """Find a column in dataframe by case-insensitive pattern matching"""
+    pattern_lower = pattern.lower().strip()
+    for col in df.columns:
+        if pattern_lower in col.lower().strip():
+            return col
+    return None
 
 def format_phone(phone_str):
     # Remove non-digit characters
@@ -869,8 +884,11 @@ else:
                             comment_options = []
                             option_sheet_rows = []
                             for idx, row in case_notes_df_display_sorted.iterrows():
-                                date_note = row.get('Day of Case Note', 'No date')
-                                case_note = row.get('Case Notes', 'No note')
+                                # Find column names using pattern matching (handles both GRIT and IPE sections)
+                                date_col = find_column_by_pattern(case_notes_df_display_sorted, 'Day of Case Note')
+                                notes_col = find_column_by_pattern(case_notes_df_display_sorted, 'Case Notes')
+                                date_note = row.get(date_col, 'No date') if date_col else 'No date'
+                                case_note = row.get(notes_col, 'No note') if notes_col else 'No note'
                                 sheet_row = row.get('_sheet_row', None)
                                 
                                 # Format date to YYYY-MM-DD if it's a valid date
@@ -1185,16 +1203,19 @@ else:
         
             
             col1, col2, col3 = st.columns(3)
-            has_client_col = 'Name of Client' in ipe_df.columns
-            has_date_received_col = 'Date Received' in ipe_df.columns
-            referral_num_ipe = ipe_df['Name of Client'].nunique() if has_client_col else 0
+            # Find columns using pattern matching to handle cleaned headers
+            client_col = find_column_by_pattern(ipe_df, 'Name of Client')
+            date_received_col = find_column_by_pattern(ipe_df, 'Date Received')
+            has_client_col = client_col is not None
+            has_date_received_col = date_received_col is not None
+            referral_num_ipe = ipe_df[client_col].nunique() if has_client_col else 0
             # create column span
             today = datetime.today()
             last_year = today - timedelta(days=365)
             last_month = today - timedelta(days=30)
             if has_date_received_col:
-                pastyear_request_ipe = ipe_df[ipe_df['Date Received'] >= last_year].shape[0]
-                pastmonth_request_ipe = ipe_df[ipe_df['Date Received'] >= last_month].shape[0]
+                pastyear_request_ipe = ipe_df[ipe_df[date_received_col] >= last_year].shape[0]
+                pastmonth_request_ipe = ipe_df[ipe_df[date_received_col] >= last_month].shape[0]
             else:
                 pastyear_request_ipe = 0
                 pastmonth_request_ipe = 0
@@ -1211,14 +1232,14 @@ else:
                 
                 # Filter data for current calendar year
                 current_year = datetime.now().year
-                if has_date_received_col:
-                    current_year_data = ipe_df[ipe_df['Date Received'].dt.year == current_year].copy()
+                if has_date_received_col and date_received_col:
+                    current_year_data = ipe_df[ipe_df[date_received_col].dt.year == current_year].copy()
                 else:
                     current_year_data = pd.DataFrame()
                 
-                if not current_year_data.empty:
+                if not current_year_data.empty and date_received_col:
                     # Group by month and count referrals
-                    monthly_referrals = current_year_data.groupby(current_year_data['Date Received'].dt.month).size().reset_index()
+                    monthly_referrals = current_year_data.groupby(current_year_data[date_received_col].dt.month).size().reset_index()
                     monthly_referrals.columns = ['Month', 'Count']
                     
                     # Create month names for better display
@@ -1264,17 +1285,18 @@ else:
                 # Filter data for current calendar year
                 current_year = datetime.now().year
                 
-                # Check if 'Day of Case Note' column exists and convert to datetime
-                if 'Day of Case Note' in ipe_df.columns:
+                # Find 'Day of Case Note' column using pattern matching
+                day_of_case_note_col = find_column_by_pattern(ipe_df, 'Day of Case Note')
+                if day_of_case_note_col:
                     # Convert to datetime if not already, specifying format to avoid warnings
-                    ipe_df['Day of Case Note'] = pd.to_datetime(ipe_df['Day of Case Note'], format='%m/%d/%Y', errors='coerce')
-                    current_year_data = ipe_df[ipe_df['Day of Case Note'].dt.year == current_year].copy()
+                    ipe_df[day_of_case_note_col] = pd.to_datetime(ipe_df[day_of_case_note_col], format='%m/%d/%Y', errors='coerce')
+                    current_year_data = ipe_df[ipe_df[day_of_case_note_col].dt.year == current_year].copy()
                 else:
                     current_year_data = pd.DataFrame()  # Empty dataframe if column doesn't exist
                 
-                if not current_year_data.empty:
+                if not current_year_data.empty and day_of_case_note_col:
                     # Group by month and count comments
-                    monthly_comments = current_year_data.groupby(current_year_data['Day of Case Note'].dt.month).size().reset_index()
+                    monthly_comments = current_year_data.groupby(current_year_data[day_of_case_note_col].dt.month).size().reset_index()
                     monthly_comments.columns = ['Month', 'Count']
                     
                     # Create month names for better display
@@ -1402,12 +1424,17 @@ else:
             # Add client filter in sidebar
             with st.expander("📝 **Add/Edit/Delete Note**"):
                 st.markdown("### 🔍 Filter by Client")
-                if not has_client_col or ipe_df.empty:
+                # Find column names at the start of this section
+                client_col = find_column_by_pattern(ipe_df, 'Name of Client')
+                day_of_case_note_col = find_column_by_pattern(ipe_df, 'Day of Case Note')
+                case_notes_col = find_column_by_pattern(ipe_df, 'Case Notes')
+                
+                if not client_col or ipe_df.empty:
                     st.info("Client name column not found or no data available.")
                     selected_client = None
                 else:
                     # Filter out NA, blank, and whitespace-only names
-                    unique_clients = sorted([name for name in ipe_df['Name of Client'].dropna().unique() 
+                    unique_clients = sorted([name for name in ipe_df[client_col].dropna().unique() 
                                            if isinstance(name, str) and name.strip()])
                     
                     if not unique_clients:
@@ -1426,23 +1453,30 @@ else:
                     st.warning("⚠️ Please select a valid client name.")
                     filtered_df = pd.DataFrame()
                 else:
-                    filtered_df = ipe_df[ipe_df['Name of Client'] == selected_client].copy()
+                    filtered_df = ipe_df[ipe_df[client_col] == selected_client].copy()
                 
                 if not filtered_df.empty and selected_client is not None:
                     st.markdown("#### 📋 Client Information")
                     
                     # Display main client information in narrative format
-                    main_columns = ['Name of Client', 'Type', 'Referral Agent', 'Date Received', 
-                                'Service End Date', 'Consent Signed for GRIT/NVFS', 'Case Manager', 
-                                'Progress Reports Sent to Referring Agent/CM']
+                    # Find actual column names using pattern matching
+                    main_column_patterns = ['Name of Client', 'Type', 'Referral Agent', 'Date Received', 
+                                          'Service End Date', 'Consent Signed for GRIT/NVFS', 'Case Manager', 
+                                          'Progress Reports Sent to Referring Agent/CM']
                     
-                    # Filter columns that exist in the dataframe
-                    available_columns = [col for col in main_columns if col in filtered_df.columns]
+                    # Map patterns to actual column names
+                    available_columns = []
+                    for pattern in main_column_patterns:
+                        found_col = find_column_by_pattern(filtered_df, pattern)
+                        if found_col:
+                            available_columns.append(found_col)
                     
                     # Create narrative display
                     narrative_text = ""
                     for col in available_columns:
-                        if col == 'Progress Reports Sent to Referring Agent/CM':
+                        col_lower = col.lower().strip()
+                        # Check patterns instead of exact matches
+                        if 'progress reports' in col_lower:
                             # Special handling for Progress Reports - collect all non-empty values from all rows
                             progress_reports = filtered_df[col].dropna().unique()
                             if len(progress_reports) > 0:
@@ -1452,7 +1486,7 @@ else:
                                         narrative_text += f"• {report}\n"
                             else:
                                 narrative_text += f"**{col}:** Not specified\n"
-                        elif col == 'Date Received':
+                        elif 'date received' in col_lower and 'day of case' not in col_lower:
                             # Special formatting for Date Received - YYYY-MM-DD format
                             value = filtered_df[col].iloc[0] if not filtered_df[col].isna().all() else "Not specified"
                             if pd.notna(value) and value != "Not specified":
@@ -1486,8 +1520,13 @@ else:
                     
                     # Display case notes separately
                     st.markdown("#### 📝 Case Notes")
-                    case_notes_columns = ['Day of Case Note', 'Case Notes']
-                    case_notes_available = [col for col in case_notes_columns if col in filtered_df.columns]
+                    # Use the columns we found earlier, or find them again if needed
+                    if not day_of_case_note_col:
+                        day_of_case_note_col = find_column_by_pattern(filtered_df, 'Day of Case Note')
+                    if not case_notes_col:
+                        case_notes_col = find_column_by_pattern(filtered_df, 'Case Notes')
+                    
+                    case_notes_available = [col for col in [day_of_case_note_col, case_notes_col] if col]
                     
                     if case_notes_available:
                         # Track original sheet row for reliable edit/delete
@@ -1499,20 +1538,20 @@ else:
                             
                             # Format the display dataframe for better date presentation
                             case_notes_df_display_formatted = case_notes_df_display.copy()
-                            if 'Day of Case Note' in case_notes_df_display_formatted.columns:
-                                case_notes_df_display_formatted['Day of Case Note'] = case_notes_df_display_formatted['Day of Case Note'].apply(
+                            if day_of_case_note_col and day_of_case_note_col in case_notes_df_display_formatted.columns:
+                                case_notes_df_display_formatted[day_of_case_note_col] = case_notes_df_display_formatted[day_of_case_note_col].apply(
                                     lambda x: pd.to_datetime(x, errors='coerce').strftime('%Y-%m-%d') if pd.notna(pd.to_datetime(x, errors='coerce')) else str(x)
                                 )
                             
                             # Sort notes chronologically by Day of Case Note
                             case_notes_df_display_sorted = case_notes_df_display.copy()
-                            if 'Day of Case Note' in case_notes_df_display_sorted.columns:
+                            if day_of_case_note_col and day_of_case_note_col in case_notes_df_display_sorted.columns:
                                 # Convert to datetime for proper sorting
-                                case_notes_df_display_sorted['Day of Case Note'] = pd.to_datetime(case_notes_df_display_sorted['Day of Case Note'], format='%m/%d/%Y', errors='coerce')
+                                case_notes_df_display_sorted[day_of_case_note_col] = pd.to_datetime(case_notes_df_display_sorted[day_of_case_note_col], format='%m/%d/%Y', errors='coerce')
                                 # Sort by date (oldest first)
-                                case_notes_df_display_sorted = case_notes_df_display_sorted.sort_values('Day of Case Note', na_position='last')
+                                case_notes_df_display_sorted = case_notes_df_display_sorted.sort_values(day_of_case_note_col, na_position='last')
                                 # Convert back to string for display
-                                case_notes_df_display_sorted['Day of Case Note'] = case_notes_df_display_sorted['Day of Case Note'].apply(
+                                case_notes_df_display_sorted[day_of_case_note_col] = case_notes_df_display_sorted[day_of_case_note_col].apply(
                                     lambda x: x.strftime('%Y-%m-%d') if pd.notna(x) else 'No date'
                                 )
                             
@@ -1521,8 +1560,9 @@ else:
                             comment_options = []
                             option_sheet_rows = []
                             for idx, row in case_notes_df_display_sorted.iterrows():
-                                date_note = row.get('Day of Case Note', 'No date')
-                                case_note = row.get('Case Notes', 'No note')
+                                # Use variable column names
+                                date_note = row.get(day_of_case_note_col, 'No date') if day_of_case_note_col else 'No date'
+                                case_note = row.get(case_notes_col, 'No note') if case_notes_col else 'No note'
                                 sheet_row = row.get('_sheet_row', None)
                                 
                                 # Format date to YYYY-MM-DD if it's a valid date
@@ -1561,8 +1601,8 @@ else:
                                 )
                                 if st.button("✏️ Edit Selected Comment", key=f"edit_btn_{selected_client}", use_container_width=True):
                                     st.session_state[f"editing_comment_{selected_client}"] = selected_comment_idx
-                                    st.session_state[f"edit_note_date_{selected_client}"] = case_notes_df_display_sorted.iloc[selected_comment_idx]['Day of Case Note']
-                                    st.session_state[f"edit_note_text_{selected_client}"] = case_notes_df_display_sorted.iloc[selected_comment_idx]['Case Notes']
+                                    st.session_state[f"edit_note_date_{selected_client}"] = case_notes_df_display_sorted.iloc[selected_comment_idx].get(day_of_case_note_col, 'No date') if day_of_case_note_col else 'No date'
+                                    st.session_state[f"edit_note_text_{selected_client}"] = case_notes_df_display_sorted.iloc[selected_comment_idx].get(case_notes_col, 'No note') if case_notes_col else 'No note'
                                     st.rerun()
                                 
                                 st.markdown("<br>", unsafe_allow_html=True)  # Add spacing
@@ -1672,11 +1712,13 @@ else:
                                                 if not sheet_headers:
                                                     st.error("❌ Could not read sheet headers. Please check the sheet structure.")
                                                 else:
-                                                    # Prepare update data
+                                                    # Prepare update data - use pattern matching to find actual column names
+                                                    # The update_row_safe function will handle case-insensitive matching with sheet headers
                                                     update_data = {
                                                         'Day of Case Note': edit_date.strftime('%m/%d/%Y'),
                                                         'Case Notes': edit_note.strip()
                                                     }
+                                                    # Note: update_row_safe uses case-insensitive header matching, so this should work
                                                     
                                                     # Update the row safely
                                                     if update_row_safe(worksheet2, row_num, update_data, sheet_headers):
@@ -1713,8 +1755,15 @@ else:
                                         st.rerun()
                             
                             # Display the table with formatted dates (chronologically sorted)
-                            case_notes_df_display_sorted = case_notes_df_display_sorted[['Day of Case Note', 'Case Notes']].sort_values('Day of Case Note', na_position='last')
-                            st.table(case_notes_df_display_sorted)
+                            # Only include columns that exist
+                            display_cols = [col for col in [day_of_case_note_col, case_notes_col] if col and col in case_notes_df_display_sorted.columns]
+                            if display_cols:
+                                if day_of_case_note_col and day_of_case_note_col in case_notes_df_display_sorted.columns:
+                                    # Re-sort by date column if it exists
+                                    case_notes_df_display_sorted = case_notes_df_display_sorted.sort_values(day_of_case_note_col, na_position='last')
+                                st.table(case_notes_df_display_sorted[display_cols])
+                            else:
+                                st.table(case_notes_df_display_sorted)
                         else:
                             st.info("No case notes available for this client.")
                     else:
