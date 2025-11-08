@@ -432,7 +432,7 @@ def append_row_simple(worksheet, row_data_dict):
         return False
 
 def append_row_ipe(worksheet, row_data_dict):
-    """Append a row to IPE sheet ensuring exact column order matches"""
+    """Append a row to IPE sheet ensuring exact column order matches the actual sheet structure"""
     try:
         # Get headers directly from the worksheet to get the full column structure
         headers = worksheet.row_values(1)
@@ -440,27 +440,43 @@ def append_row_ipe(worksheet, row_data_dict):
             st.error("❌ Could not read sheet headers")
             return False
         
-        # Build row using the exact IPE column order, then pad with empty values for any extra columns
+        # Build row array matching the exact structure of the sheet
+        # For each column position in the sheet, find matching data
         new_row = []
         
-        # First, fill in values for the known IPE columns in exact order
-        for col_name in IPE_COLUMN_ORDER:
+        for i, header in enumerate(headers):
+            header_str = str(header).strip() if header else ''
+            header_lower = header_str.lower()
             value = ''
-            # Try to find matching value in row_data_dict (case-insensitive, flexible matching)
-            col_lower = col_name.lower().strip()
-            for key, val in row_data_dict.items():
-                key_lower = str(key).lower().strip()
-                if (key_lower == col_lower or 
-                    col_lower in key_lower or 
-                    key_lower in col_lower):
-                    value = str(val) if val is not None else ''
+            
+            # Try to match this sheet header to our IPE_COLUMN_ORDER columns
+            # This ensures we match the actual column positions in the sheet
+            for col_name in IPE_COLUMN_ORDER:
+                col_lower = col_name.lower().strip()
+                # Check if this sheet header matches our expected column name
+                if (header_lower == col_lower or 
+                    header_lower in col_lower or 
+                    col_lower in header_lower):
+                    # Found a match! Now get the value from row_data_dict
+                    for key, val in row_data_dict.items():
+                        key_lower = str(key).lower().strip()
+                        if (key_lower == col_lower or 
+                            col_lower in key_lower or 
+                            key_lower in col_lower):
+                            value = str(val) if val is not None else ''
+                            break
                     break
+            
             new_row.append(value)
         
-        # If there are more columns in the sheet than our IPE_COLUMN_ORDER, pad with empty strings
-        # This handles cases where the sheet has additional columns after Case Notes
-        while len(new_row) < len(headers):
-            new_row.append('')
+        # Debug: Show what we're about to append (helpful for troubleshooting)
+        # Enable this temporarily to see what's happening
+        with st.expander("🔍 Debug: IPE Row Append Details", expanded=False):
+            st.write(f"**Number of headers in sheet:** {len(headers)}")
+            st.write(f"**First 15 headers:** {headers[:15]}")
+            st.write(f"**Data keys provided:** {list(row_data_dict.keys())}")
+            st.write(f"**Row length:** {len(new_row)}")
+            st.write(f"**Expected IPE columns:** {IPE_COLUMN_ORDER}")
         
         # Append the row directly - Google Sheets will handle it
         worksheet.append_row(new_row, value_input_option='USER_ENTERED')
@@ -468,6 +484,15 @@ def append_row_ipe(worksheet, row_data_dict):
         
     except Exception as e:
         st.error(f"❌ Error appending row to IPE sheet: {str(e)}")
+        # Add more detailed error info
+        try:
+            headers = worksheet.row_values(1)
+            st.write(f"**Debug Info:**")
+            st.write(f"- Number of headers: {len(headers) if headers else 0}")
+            st.write(f"- First 10 headers: {headers[:10] if headers else 'None'}")
+            st.write(f"- Data keys provided: {list(row_data_dict.keys())}")
+        except:
+            pass
         return False
 
 def append_row_safe(worksheet, row_data_dict, sheet_headers):
@@ -1929,7 +1954,7 @@ else:
                         )
                         
                         # Add note button
-                        submit_button = st.form_submit_button("➕ Add Note!")
+                        submit_button = st.form_submit_button("➕ Add Note")
                         
                         if submit_button:
                             if not new_note.strip():
