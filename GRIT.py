@@ -50,6 +50,20 @@ client = gspread.authorize(creds)
 # Cache configuration
 CACHE_DURATION = 300  
 
+# IPE sheet column order (exact order as specified) - defined early so it can be used in fetch function
+IPE_COLUMN_ORDER = [
+    'Name of Client',
+    'Type',
+    'Referral Agent',
+    'Date Received',
+    'Service End Date',
+    'Consent Signed for GRIT/NVFS',
+    'Case Manager',
+    'Progress Reports Sent to Referring Agent/CM',
+    'Day of Case Note',
+    'Case Notes'
+]
+
 def normalize_sheet_data(values):
     """Normalize sheet data by ensuring all rows have the same length and removing leading empty columns"""
     if not values or len(values) == 0:
@@ -160,10 +174,41 @@ def fetch_google_sheets_data():
             grit_df = pd.DataFrame()
 
         spreadsheet2 = client.open('Referral Information')
-        worksheet2 = spreadsheet2.worksheet('Sheet1')
+        worksheet2_sheet1 = spreadsheet2.worksheet('Sheet1')
         
-        # Get all values and handle duplicate headers
-        ipe_values = worksheet2.get_all_values()
+        # Try to get Sheet2, create it if it doesn't exist
+        try:
+            worksheet2_sheet2 = spreadsheet2.worksheet('Sheet2')
+            # Check if Sheet2 has headers, if not add them
+            existing_headers = worksheet2_sheet2.row_values(1)
+            if not existing_headers or len(existing_headers) == 0:
+                # Sheet2 exists but is empty, add clean headers
+                worksheet2_sheet2.append_row(IPE_COLUMN_ORDER, value_input_option='USER_ENTERED')
+        except:
+            # Sheet2 doesn't exist, create it with clean headers
+            worksheet2_sheet2 = spreadsheet2.add_worksheet(title='Sheet2', rows=1000, cols=20)
+            # Add clean headers in correct order (no leading empty columns)
+            worksheet2_sheet2.append_row(IPE_COLUMN_ORDER, value_input_option='USER_ENTERED')
+        
+        # Get all values from Sheet1
+        ipe_values_sheet1 = worksheet2_sheet1.get_all_values()
+        # Get all values from Sheet2
+        ipe_values_sheet2 = worksheet2_sheet2.get_all_values()
+        
+        # Combine data from both sheets
+        ipe_values = []
+        if ipe_values_sheet1:
+            ipe_values = ipe_values_sheet1.copy()
+            # Add data from Sheet2 (skip header row if it exists)
+            if ipe_values_sheet2 and len(ipe_values_sheet2) > 1:
+                # Check if Sheet2 has headers - if first row matches Sheet1 headers, skip it
+                if ipe_values_sheet2[0] == ipe_values_sheet1[0]:
+                    ipe_values.extend(ipe_values_sheet2[1:])  # Skip header row
+                else:
+                    ipe_values.extend(ipe_values_sheet2)  # Include all rows
+        elif ipe_values_sheet2:
+            ipe_values = ipe_values_sheet2.copy()
+        
         if ipe_values:
             # Normalize data to fix column alignment
             normalized_ipe = normalize_sheet_data(ipe_values)
@@ -260,13 +305,28 @@ def get_worksheets():
         spreadsheet1 = client.open('PWC_Referral_GRIT')
         worksheet1 = spreadsheet1.worksheet('GRIT')
         spreadsheet2 = client.open('Referral Information')
-        worksheet2 = spreadsheet2.worksheet('Sheet1')
-        return worksheet1, worksheet2, None
+        worksheet2_sheet1 = spreadsheet2.worksheet('Sheet1')
+        
+        # Get Sheet2, create if it doesn't exist
+        try:
+            worksheet2_sheet2 = spreadsheet2.worksheet('Sheet2')
+            # Check if Sheet2 has headers, if not add them
+            existing_headers = worksheet2_sheet2.row_values(1)
+            if not existing_headers or len(existing_headers) == 0:
+                # Sheet2 exists but is empty, add clean headers
+                worksheet2_sheet2.append_row(IPE_COLUMN_ORDER, value_input_option='USER_ENTERED')
+        except:
+            # Sheet2 doesn't exist, create it with clean headers
+            worksheet2_sheet2 = spreadsheet2.add_worksheet(title='Sheet2', rows=1000, cols=20)
+            # Add clean headers in correct order (no leading empty columns)
+            worksheet2_sheet2.append_row(IPE_COLUMN_ORDER, value_input_option='USER_ENTERED')
+        
+        return worksheet1, worksheet2_sheet1, worksheet2_sheet2, None
     except Exception as e:
-        return None, None, str(e) 
+        return None, None, None, str(e) 
 
 # Get worksheets for write operations
-worksheet1, worksheet2, worksheet_error = get_worksheets()
+worksheet1, worksheet2_sheet1, worksheet2_sheet2, worksheet_error = get_worksheets()
 if worksheet_error:
     st.error(f"Error accessing worksheets: {worksheet_error}")
 
@@ -379,20 +439,6 @@ def update_row_safe(worksheet, row_num, row_data_dict, sheet_headers):
     """Safely update a row in Google Sheets - simplified version without strict verification"""
     # Use the simpler function that reads headers directly
     return update_row_simple(worksheet, row_num, row_data_dict)
-
-# IPE sheet column order (exact order as specified)
-IPE_COLUMN_ORDER = [
-    'Name of Client',
-    'Type',
-    'Referral Agent',
-    'Date Received',
-    'Service End Date',
-    'Consent Signed for GRIT/NVFS',
-    'Case Manager',
-    'Progress Reports Sent to Referring Agent/CM',
-    'Day of Case Note',
-    'Case Notes'
-]
 
 def append_row_simple(worksheet, row_data_dict):
     """Append a row to Google Sheets by mapping data to column positions - no strict verification"""
@@ -1554,8 +1600,8 @@ else:
                                     'Day of Case Note': day_of_case_note.strftime('%m/%d/%Y'),
                                     'Case Notes': case_notes
                                 }
-                                # Append row using IPE-specific function that ensures exact column order
-                                if append_row_ipe(worksheet2, new_row_data):
+                                # Append row to Sheet2 (new data goes here)
+                                if append_row_ipe(worksheet2_sheet2, new_row_data):
                                     # Clear cache to show updated data
                                     fetch_google_sheets_data.clear()
                                     st.session_state.data_last_fetched = 0
@@ -1817,13 +1863,14 @@ else:
                                                     raise ValueError("Unable to resolve sheet row for deletion.")
                                                 
                                                 # Get sheet headers safely to determine proper column range
-                                                sheet_headers = get_sheet_headers_safe(worksheet2)
+                                                # Note: For now, edits/deletes work on Sheet1. In future, we can track which sheet each row is from.
+                                                sheet_headers = get_sheet_headers_safe(worksheet2_sheet1)
                                                 if not sheet_headers:
                                                     st.error("❌ Could not read sheet headers. Please check the sheet structure.")
                                                 else:
                                                     last_col_letter = col_num_to_letter(len(sheet_headers))
-                                                    # Delete the row by clearing it
-                                                    worksheet2.batch_clear([f'A{row_num}:{last_col_letter}{row_num}'])
+                                                    # Delete the row by clearing it (from Sheet1 for now)
+                                                    worksheet2_sheet1.batch_clear([f'A{row_num}:{last_col_letter}{row_num}'])
                                                     
                                                     # Clear cache to show updated data
                                                     fetch_google_sheets_data.clear()
@@ -1898,7 +1945,8 @@ else:
                                                 }
                                                 
                                                 # Update the row directly - no header verification needed
-                                                if update_row_safe(worksheet2, row_num, update_data, None):
+                                                # Note: For now, edits work on Sheet1. In future, we can track which sheet each row is from.
+                                                if update_row_safe(worksheet2_sheet1, row_num, update_data, None):
                                                     # Clear cache to show updated data
                                                     fetch_google_sheets_data.clear()
                                                     st.success(f"✅ Comment updated successfully for {selected_client}")
@@ -1985,8 +2033,8 @@ else:
                                         'Case Notes': new_note.strip()
                                     }
                                     
-                                    # Append row using IPE-specific function that ensures exact column order
-                                    if append_row_ipe(worksheet2, new_row_data):
+                                    # Append row to Sheet2 (new notes go here)
+                                    if append_row_ipe(worksheet2_sheet2, new_row_data):
                                         # Clear cache to show updated data
                                         fetch_google_sheets_data.clear()
                                         st.success(f"✅ Note added successfully for {selected_client} on {note_date_str}")
