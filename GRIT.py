@@ -434,23 +434,37 @@ def append_row_simple(worksheet, row_data_dict):
 def append_row_ipe(worksheet, row_data_dict):
     """Append a row to IPE sheet ensuring exact column order matches the actual sheet structure"""
     try:
-        # Get headers directly from the worksheet to get the full column structure
-        headers = worksheet.row_values(1)
+        # Use get_all_values to get the full structure including leading empty columns
+        all_values = worksheet.get_all_values()
+        if not all_values or len(all_values) == 0:
+            st.error("❌ Could not read sheet data")
+            return False
+        
+        # Get headers from the first row
+        headers = all_values[0]
         if not headers:
             st.error("❌ Could not read sheet headers")
             return False
         
-        # Build row array matching the exact structure of the sheet
-        # For each column position in the sheet, find matching data
-        new_row = []
-        
+        # Find the first non-empty header to detect leading empty columns
+        first_data_col = 0
         for i, header in enumerate(headers):
+            if header and str(header).strip():
+                first_data_col = i
+                break
+        
+        # Build row array matching the exact structure of the sheet
+        # Start with leading empty columns if they exist
+        new_row = [''] * first_data_col  # Pad with empty strings for leading empty columns
+        
+        # Now add data for each header position starting from first_data_col
+        for i in range(first_data_col, len(headers)):
+            header = headers[i]
             header_str = str(header).strip() if header else ''
             header_lower = header_str.lower()
             value = ''
             
             # Try to match this sheet header to our IPE_COLUMN_ORDER columns
-            # This ensures we match the actual column positions in the sheet
             for col_name in IPE_COLUMN_ORDER:
                 col_lower = col_name.lower().strip()
                 # Check if this sheet header matches our expected column name
@@ -469,12 +483,9 @@ def append_row_ipe(worksheet, row_data_dict):
             
             new_row.append(value)
         
-        # Debug: Show what we're about to append (helpful for troubleshooting)
-        # Removed expander to avoid nesting issues - uncomment if needed for debugging
-        # st.write(f"**Debug - Number of headers:** {len(headers)}")
-        # st.write(f"**Debug - First 10 headers:** {headers[:10]}")
-        # st.write(f"**Debug - Data keys:** {list(row_data_dict.keys())}")
-        # st.write(f"**Debug - Row length:** {len(new_row)}")
+        # Ensure the row length matches the header length (in case there are trailing empty columns)
+        while len(new_row) < len(headers):
+            new_row.append('')
         
         # Append the row directly - Google Sheets will handle it
         worksheet.append_row(new_row, value_input_option='USER_ENTERED')
@@ -484,11 +495,14 @@ def append_row_ipe(worksheet, row_data_dict):
         st.error(f"❌ Error appending row to IPE sheet: {str(e)}")
         # Add more detailed error info
         try:
-            headers = worksheet.row_values(1)
-            st.write(f"**Debug Info:**")
-            st.write(f"- Number of headers: {len(headers) if headers else 0}")
-            st.write(f"- First 10 headers: {headers[:10] if headers else 'None'}")
-            st.write(f"- Data keys provided: {list(row_data_dict.keys())}")
+            all_values = worksheet.get_all_values()
+            if all_values:
+                headers = all_values[0]
+                st.write(f"**Debug Info:**")
+                st.write(f"- Total columns in sheet: {len(headers) if headers else 0}")
+                st.write(f"- First 15 headers: {headers[:15] if headers else 'None'}")
+                st.write(f"- First non-empty header index: {next((i for i, h in enumerate(headers) if h and str(h).strip()), 0)}")
+                st.write(f"- Data keys provided: {list(row_data_dict.keys())}")
         except:
             pass
         return False
