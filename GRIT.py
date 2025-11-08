@@ -470,13 +470,11 @@ def append_row_ipe(worksheet, row_data_dict):
             new_row.append(value)
         
         # Debug: Show what we're about to append (helpful for troubleshooting)
-        # Enable this temporarily to see what's happening
-        with st.expander("🔍 Debug: IPE Row Append Details", expanded=False):
-            st.write(f"**Number of headers in sheet:** {len(headers)}")
-            st.write(f"**First 15 headers:** {headers[:15]}")
-            st.write(f"**Data keys provided:** {list(row_data_dict.keys())}")
-            st.write(f"**Row length:** {len(new_row)}")
-            st.write(f"**Expected IPE columns:** {IPE_COLUMN_ORDER}")
+        # Removed expander to avoid nesting issues - uncomment if needed for debugging
+        # st.write(f"**Debug - Number of headers:** {len(headers)}")
+        # st.write(f"**Debug - First 10 headers:** {headers[:10]}")
+        # st.write(f"**Debug - Data keys:** {list(row_data_dict.keys())}")
+        # st.write(f"**Debug - Row length:** {len(new_row)}")
         
         # Append the row directly - Google Sheets will handle it
         worksheet.append_row(new_row, value_input_option='USER_ENTERED')
