@@ -1929,7 +1929,7 @@ else:
                         )
                         
                         # Add note button
-                        submit_button = st.form_submit_button("➕ Add Note")
+                        submit_button = st.form_submit_button("➕ Add Note!")
                         
                         if submit_button:
                             if not new_note.strip():
