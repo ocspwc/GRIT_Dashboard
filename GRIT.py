@@ -139,11 +139,21 @@ def fetch_google_sheets_data():
                         header_counts[header] = 1
                         cleaned_headers.append(header)
                 
-                # Create DataFrame with cleaned headers
+                # Create DataFrame with cleaned headers using pd.concat
                 grit_data = normalized_grit[1:]  # Skip header row
-                grit_df = pd.DataFrame(grit_data, columns=cleaned_headers)
-                grit_df['Date'] = pd.to_datetime(grit_df['Date'], errors='coerce')
-                grit_df['Day of Case Note'] = pd.to_datetime(grit_df['Day of Case Note'], errors='coerce')
+                if grit_data:
+                    # Option 1: Direct creation (more efficient)
+                    # grit_df = pd.DataFrame(grit_data, columns=cleaned_headers)
+                    
+                    # Option 2: Using pd.concat (if you prefer this approach)
+                    dataframes = [pd.DataFrame([row], columns=cleaned_headers) for row in grit_data]
+                    grit_df = pd.concat(dataframes, ignore_index=True) if dataframes else pd.DataFrame(columns=cleaned_headers)
+                    
+                    grit_df['Date'] = pd.to_datetime(grit_df['Date'], errors='coerce')
+                    grit_df['Day of Case Note'] = pd.to_datetime(grit_df['Day of Case Note'], errors='coerce')
+                else:
+                    # Empty DataFrame with correct columns
+                    grit_df = pd.DataFrame(columns=cleaned_headers)
             else:
                 grit_df = pd.DataFrame()
         else:
@@ -170,18 +180,28 @@ def fetch_google_sheets_data():
                         header_counts[header] = 1
                         cleaned_headers.append(header)
                 
-                # Create DataFrame with cleaned headers
+                # Create DataFrame with cleaned headers using pd.concat
                 ipe_data = normalized_ipe[1:]  # Skip header row
-                ipe_df = pd.DataFrame(ipe_data, columns=cleaned_headers)
-                # Safely convert date columns - handle cleaned headers
-                for col in cleaned_headers:
-                    col_lower = col.lower().strip()
-                    # Check if this is a "Date Received" column (handle cleaned headers like "Date Received_2")
-                    if 'date received' in col_lower and not col_lower.startswith('day of case'):
-                        ipe_df[col] = pd.to_datetime(ipe_df[col], errors='coerce')
-                    # Check if this is a "Day of Case Note" column
-                    elif 'day of case note' in col_lower:
-                        ipe_df[col] = pd.to_datetime(ipe_df[col], errors='coerce')
+                if ipe_data:
+                    # Option 1: Direct creation (more efficient)
+                    # ipe_df = pd.DataFrame(ipe_data, columns=cleaned_headers)
+                    
+                    # Option 2: Using pd.concat (if you prefer this approach)
+                    dataframes = [pd.DataFrame([row], columns=cleaned_headers) for row in ipe_data]
+                    ipe_df = pd.concat(dataframes, ignore_index=True) if dataframes else pd.DataFrame(columns=cleaned_headers)
+                    
+                    # Safely convert date columns - handle cleaned headers
+                    for col in cleaned_headers:
+                        col_lower = col.lower().strip()
+                        # Check if this is a "Date Received" column (handle cleaned headers like "Date Received_2")
+                        if 'date received' in col_lower and not col_lower.startswith('day of case'):
+                            ipe_df[col] = pd.to_datetime(ipe_df[col], errors='coerce')
+                        # Check if this is a "Day of Case Note" column
+                        elif 'day of case note' in col_lower:
+                            ipe_df[col] = pd.to_datetime(ipe_df[col], errors='coerce')
+                else:
+                    # Empty DataFrame with correct columns
+                    ipe_df = pd.DataFrame(columns=cleaned_headers)
             else:
                 ipe_df = pd.DataFrame()
         else:
@@ -360,6 +380,20 @@ def update_row_safe(worksheet, row_num, row_data_dict, sheet_headers):
     # Use the simpler function that reads headers directly
     return update_row_simple(worksheet, row_num, row_data_dict)
 
+# IPE sheet column order (exact order as specified)
+IPE_COLUMN_ORDER = [
+    'Name of Client',
+    'Type',
+    'Referral Agent',
+    'Date Received',
+    'Service End Date',
+    'Consent Signed for GRIT/NVFS',
+    'Case Manager',
+    'Progress Reports Sent to Referring Agent/CM',
+    'Day of Case Note',
+    'Case Notes'
+]
+
 def append_row_simple(worksheet, row_data_dict):
     """Append a row to Google Sheets by mapping data to column positions - no strict verification"""
     try:
@@ -395,6 +429,45 @@ def append_row_simple(worksheet, row_data_dict):
         
     except Exception as e:
         st.error(f"❌ Error appending row: {str(e)}")
+        return False
+
+def append_row_ipe(worksheet, row_data_dict):
+    """Append a row to IPE sheet ensuring exact column order matches"""
+    try:
+        # Get headers directly from the worksheet to get the full column structure
+        headers = worksheet.row_values(1)
+        if not headers:
+            st.error("❌ Could not read sheet headers")
+            return False
+        
+        # Build row using the exact IPE column order, then pad with empty values for any extra columns
+        new_row = []
+        
+        # First, fill in values for the known IPE columns in exact order
+        for col_name in IPE_COLUMN_ORDER:
+            value = ''
+            # Try to find matching value in row_data_dict (case-insensitive, flexible matching)
+            col_lower = col_name.lower().strip()
+            for key, val in row_data_dict.items():
+                key_lower = str(key).lower().strip()
+                if (key_lower == col_lower or 
+                    col_lower in key_lower or 
+                    key_lower in col_lower):
+                    value = str(val) if val is not None else ''
+                    break
+            new_row.append(value)
+        
+        # If there are more columns in the sheet than our IPE_COLUMN_ORDER, pad with empty strings
+        # This handles cases where the sheet has additional columns after Case Notes
+        while len(new_row) < len(headers):
+            new_row.append('')
+        
+        # Append the row directly - Google Sheets will handle it
+        worksheet.append_row(new_row, value_input_option='USER_ENTERED')
+        return True
+        
+    except Exception as e:
+        st.error(f"❌ Error appending row to IPE sheet: {str(e)}")
         return False
 
 def append_row_safe(worksheet, row_data_dict, sheet_headers):
@@ -1444,8 +1517,8 @@ else:
                                     'Day of Case Note': day_of_case_note.strftime('%m/%d/%Y'),
                                     'Case Notes': case_notes
                                 }
-                                # Append row directly - no header verification needed
-                                if append_row_safe(worksheet2, new_row_data, None):
+                                # Append row using IPE-specific function that ensures exact column order
+                                if append_row_ipe(worksheet2, new_row_data):
                                     # Clear cache to show updated data
                                     fetch_google_sheets_data.clear()
                                     st.session_state.data_last_fetched = 0
@@ -1875,8 +1948,8 @@ else:
                                         'Case Notes': new_note.strip()
                                     }
                                     
-                                    # Append row directly - no header verification needed
-                                    if append_row_safe(worksheet2, new_row_data, None):
+                                    # Append row using IPE-specific function that ensures exact column order
+                                    if append_row_ipe(worksheet2, new_row_data):
                                         # Clear cache to show updated data
                                         fetch_google_sheets_data.clear()
                                         st.success(f"✅ Note added successfully for {selected_client} on {note_date_str}")
